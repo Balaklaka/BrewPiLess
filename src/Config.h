@@ -96,7 +96,7 @@
 // Enable humidity sensor
 //
 #ifndef EnableBME280Support
-#define EnableBME280Support true
+#define EnableBME280Support false
 #endif
 //
 //////////////////////////////////////////////////////////////////////////
@@ -317,7 +317,7 @@
 #define FS_EEPROM true
 #endif
 
-#define BPL_VERSION "4.4"
+#define BPL_VERSION "4.5"
 
 
 #ifndef MORE_PINS_CONFIGURATION
@@ -374,7 +374,11 @@
 #define rotarySwitchPin 25
 
 // Only ADC1 (pin 32~39) is allowed 
+#if CONFIG_IDF_TARGET_ESP32S3
+#define PressureAdcPin  4
+#else
 #define PressureAdcPin  36
+#endif
 
 #else // #ifdef ESP32
 #define NODEMCU_PIN_A0 17	// Analog

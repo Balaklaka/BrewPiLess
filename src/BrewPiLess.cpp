@@ -155,6 +155,7 @@ extern "C" {
 #endif
 
 #define GRAVITY_PATH       "/gravity"
+#define SETGRAVITY_PATH       "/sgset"
 #define GravityDeviceConfigPath "/gdc"
 #define GravityFormulaPath "/coeff"
 
@@ -536,6 +537,12 @@ public:
 					DBG_PRINTF("config saved: %s\n",theSettings.systemConfiguration()->hostnetworkname);
 					request->send(200,ApplicationJsonType,"{}");
 					display.setAutoOffPeriod(theSettings.systemConfiguration()->backlite);
+					#if ESP32
+					if (theSettings.systemConfiguration()->securedAp){
+						WiFi.eraseAP();
+						// https://github.com/espressif/arduino-esp32/issues/8976
+					}
+					#endif
 
 					#if TWOFACED_LCD
 					sharedDisplayManager.setDisplayMode(theSettings.systemConfiguration()->displayMode);
@@ -547,6 +554,9 @@ public:
 					}
 
 					if(!request->hasParam("nb")){
+						#if ESP32
+						WiFi.eraseAP(); // https://github.com/espressif/arduino-esp32/issues/8976
+						#endif
 						requestRestart(false);
 					}
 				}else{
@@ -971,6 +981,7 @@ void greeting(std::function<void(const char*)> sendFunc)
 #if EnableHumidityControlSupport
 	JsonObject hum = doc.createNestedObject("rh");
 	hum["m"] = humidityControl.mode();
+	hum["s"] = humidityControl.state();
 	hum["t"] = humidityControl.targetRH();
 #endif
 
@@ -1154,6 +1165,12 @@ void periodicalReport(void)
 		doc["hr"]= humidityControl.roomHumidity();
 	}
 
+	if(humidityControl.mode() == HC_ModeControl){
+		doc["ht"] = humidityControl.targetRH();
+	}
+
+	doc["hs"] = humidityControl.state();
+
 #endif
 
 
@@ -1189,7 +1206,6 @@ void sayHello()
 }
 #endif 
 
-#define MAX_DATA_SIZE 256
 
 class LogHandler:public AsyncWebHandler
 {
@@ -1318,11 +1334,12 @@ public:
 };
 LogHandler logHandler;
 
+#define MAX_DATA_SIZE 300
 
 class ExternalDataHandler:public AsyncWebHandler
 {
 private:
-	char _buffer[MAX_DATA_SIZE+2];
+	char *_buffer;
 	char *_data;
 
 	size_t _dataLength;
@@ -1343,9 +1360,6 @@ private:
 public:
 
 	ExternalDataHandler(){
-    	_data = &(_buffer[2]);
-    	_buffer[0]='G';
-    	_buffer[1]=':';
 	}
 
 	void loadConfig(void){
@@ -1355,6 +1369,7 @@ public:
 	bool canHandle(AsyncWebServerRequest *request){
 		DBG_PRINTF("req: %s\n", request->url().c_str());
 	 	if(request->url() == GRAVITY_PATH	) return true;
+	 	if(request->url() == SETGRAVITY_PATH	) return true;
 	 	if(request->url() == GravityDeviceConfigPath) return true;
 	 	if(request->url() == GravityFormulaPath) return true;
 #if	SupportTiltHydrometer
@@ -1401,7 +1416,7 @@ public:
 					DBG_PRINTF("scan for Pills...\n");
 					pillScanner.scan([](PillHydrometerInfo* pill){
 						String ret=String("{\"pill\":{\"a\":[");
-								const uint8_t *address = pill->macAddress.getNative();
+								const uint8_t *address = pill->macAddress.getBase()->val;
 								for(int a=0;a<6;a++){
 										ret += address[a];
 										if(a<5) ret+=String(",");
@@ -1425,17 +1440,40 @@ public:
 		 }
 #endif
 
+		if(request->url() == SETGRAVITY_PATH){
+			if(request->hasParam("sg")){
+				float gravity = request->getParam("sg")->value().toFloat();
+				DBG_PRINTF("set sg\n");
+				externalData.setGravity(gravity);
+				request->send(200,ApplicationJsonType,"{}");
+			}else if(request->hasParam("og")){
+				float gravity = request->getParam("og")->value().toFloat();
+				externalData.setOriginalGravity(gravity);
+				request->send(200,ApplicationJsonType,"{}");
+				DBG_PRINTF("set og\n");
+			}else{
+				request->send(400);
+			}
+			return;
+		}
 
 		if(request->url() == GRAVITY_PATH){
 			if(request->method() != HTTP_POST){
 				request->send(400);
 				return;
 			}
+			request->send(200,ApplicationJsonType,"{}");
+	   		_buffer[0]='G';
+    		_buffer[1]=':';
 			stringAvailable(_buffer); // send to brower to log on Javascript Console
+			// process the gravity report from iSpindel
 			processGravity(request,_data,_dataLength);
 			// Process the name
 			externalData.gravityDeviceSetting(_data);
 			stringAvailable(_data);
+			
+			free(_buffer);
+			_buffer=NULL;
 			return;
 		}
 		if(request->url() == GravityFormulaPath){
@@ -1462,11 +1500,14 @@ public:
 		}
 		// config
 		if(request->method() == HTTP_POST){
+			DBG_PRINTF("Config\n");
   			if(externalData.processconfig(_data)){
 		  		request->send(200,ApplicationJsonType,"{}");
 			}else{
 				request->send(400);
 			}
+			free(_buffer);
+			_buffer= NULL;
 			return;
 		}//else{
 			// get
@@ -1482,11 +1523,17 @@ public:
 	virtual void handleBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)override final{
 		if(!index){
 		    DBG_PRINTF("BodyStart-len:%d total: %u\n",len, total);
+			size_t asize = (total > 256)? (total+4):256;
+			_buffer =(char*) malloc(asize);
+			_error= (_buffer ==NULL);
 			_dataLength =0;
-			_error=(total >= MAX_DATA_SIZE);
+	    	_data = _buffer +2;
 		}
 
-		if(_error) return;
+		if(_error){
+			DBG_PRINTF("Error handleBody for failure in allocation memory\n");
+			return;
+		}
 		for(size_t i=0; i< len; i++){
 			//Serial.write(data[i]);
 			_data[_dataLength ++] = data[i];
@@ -1951,14 +1998,14 @@ void setup(void){
 	WiFiConfiguration *wifiCon=theSettings.getWifiConfiguration();
 
 	if(strlen(syscfg->hostnetworkname)>0)
-		WiFiSetup.begin(wifiMode,syscfg->hostnetworkname,syscfg->password,
+		WiFiSetup.begin(wifiMode,syscfg->hostnetworkname,syscfg->securedAp? syscfg->password:NULL,
 					wifiCon->ssid[0]? wifiCon->ssid:NULL,
 					wifiCon->pass[0]? wifiCon->pass:NULL);
 	else // something wrong with the file
 		WiFiSetup.begin(wifiMode,DEFAULT_HOSTNAME,DEFAULT_PASSWORD);
 #else
 	if(strlen(syscfg->hostnetworkname)>0)
-		WiFiSetup.begin(wifiMode,syscfg->hostnetworkname,syscfg->password);
+		WiFiSetup.begin(wifiMode,syscfg->hostnetworkname,syscfg->securedAp? syscfg->password:NULL);
 	else // something wrong with the file
 		WiFiSetup.begin(wifiMode,DEFAULT_HOSTNAME,DEFAULT_PASSWORD);
 #endif
@@ -2062,7 +2109,7 @@ void setup(void){
 	#endif
 
 #if SupportBleHydrometer
-	bleListener.begin();
+	bleScanner.begin();
 #endif
 
 #if EanbleParasiteTempControl
@@ -2163,7 +2210,7 @@ void loop(void){
 	#endif
 	
 	#if SupportBleHydrometer
-	bleListener.loop();
+	bleScanner.loop();
 	#endif
 
 	#if EnableHumidityControlSupport

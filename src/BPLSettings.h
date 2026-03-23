@@ -20,7 +20,8 @@ typedef struct _SystemConfiguration{
     uint32_t dns;
     uint8_t  displayMode;
     uint8_t glycolChilling;
-    uint8_t _padding[2];
+    uint8_t securedAp;
+    uint8_t _padding;
 }SystemConfiguration;
 
 //*****************************************************
@@ -59,19 +60,22 @@ typedef  struct _CalibrationPoint{
 
 
 typedef struct _GravityDeviceConfiguration{
-    float   coefficients[4];
+    float   tiltCorrectionCoeff[4];
+    float   gravityFormulaCoeff[4];
+    CalibrationPoint calPoints[MaxNumberCalibrationPoints];
+
     float   lpfBeta;
 	float   offset;
     
     uint8_t  gravityDeviceType;
     uint8_t  calbybpl;
     uint8_t  numCalPoints;
-
 	uint8_t  stableThreshold;
+
 	uint8_t  usePlato;
-    uint8_t  _padding[6];
-    CalibrationPoint calPoints[MaxNumberCalibrationPoints];
-    uint8_t  _unused2;
+    uint8_t  tempCorrection;
+    uint8_t  _padding[18];
+
 }GravityDeviceConfiguration;
 
 

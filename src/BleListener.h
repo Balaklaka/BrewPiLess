@@ -2,16 +2,15 @@
 #define BleListener_H
 #include <Arduino.h>
 #include <functional>
-
+#include <list>
 #include "Config.h"
 #if ESP32
 #include <NimBLEDevice.h>
 #include <NimBLEAdvertisedDevice.h>
-#include "NimBLEEddystoneURL.h"
-#include "NimBLEEddystoneTLM.h"
 #include "NimBLEBeacon.h"
 
 
+typedef std::function<void(NimBLEAdvertisedDevice*)> ScannedDevicdFoundFunc;
 
 class BleHydrometerDevice{
 public:
@@ -25,34 +24,49 @@ public:
 typedef std::function<void(BleHydrometerDevice*)> BleHydrometerDataHandler;
 typedef std::function<void(std::vector<BleHydrometerDevice*>)> BleHydrometerScanResultHandler;
 
+// Device specific interace.
+// when a device found, the Device is passed to the BleDeviceListener
+//  - Note: MAC address could have been used to identify the device instead of passing all data
+//          However, for Tilt, ONLY UUID is used to identify the color.
 class BleDeviceListener{
 public:
     BleDeviceListener(void):_listening(false){}
-    // start to scan periodic
+    // start to listen to information periodically
     void startListen(void);
     void stopListen(void);
-    // 
-    virtual bool onDeviceFound(NimBLEAdvertisedDevice*)=0;
+    // called when a device found
+    virtual bool onDeviceFound(const NimBLEAdvertisedDevice*)=0;
 protected:
     bool _listening;
 };
 
-class BleListener :public BLEAdvertisedDeviceCallbacks{
+// BleScanner handles BLEScan, including periodical scanning and scanning for devices.
+class BleScanner :public BLEAdvertisedDeviceCallbacks{
 public:
-    BleListener():_scanning(false),_commandScan(false),_enabled(false){
-        _clearData();
+    BleScanner():_scanning(false),_commandScan(false),_enabled(false){       
     }
-    // 
+    // begin() and loop() are called in setup() and loop(), to handle periodical scanning
     void begin(void);
     void loop(void);
-    void startListen(BleDeviceListener* listener);
-    void stopListen(BleDeviceListener* listener);
-    // callbacks
-    virtual void onResult(NimBLEAdvertisedDevice* advertisedDevice);
+
+    // periodical scanning
+    void addListener(BleDeviceListener* listener);
+    void removeListener(BleDeviceListener* listener);
+
+    // Active scan, for finding devices.
+    // BLEScanResults scan(uint32_t scanTime);
+    void scanForDevices(uint32_t scanTime,ScannedDevicdFoundFunc);
+
+    void clearScanData(void);
+
+    // callbacks of BLEAdvertisedDeviceCallbacks
+    void onResult(const NimBLEAdvertisedDevice* advertisedDevice) override;
+    void onDiscovered(const NimBLEAdvertisedDevice* advertisedDevice) override;
 protected:
     void _startScan(void);
-    void _clearData(void);
-    
+
+    void _setupAsyncScan(void);
+
     bool _scanning;
     bool _commandScan;
     bool _enabled;
@@ -64,7 +78,7 @@ protected:
     uint32_t _lastScanTime;
 };
 
-extern BleListener bleListener;
+extern BleScanner bleScanner;
 
 
 #endif
